@@ -1,5 +1,6 @@
 import lmdb
 import pickle
+from collections import deque
 
 class ValueSerializer:
     """
@@ -221,6 +222,66 @@ class GraphDB:
         """Close the LMDB environment (final cleanup)."""
         self.env.close()
     
+    def conditional_bfs(self, start_node, edge_condition, max_levels=3):
+        """
+        Perform a BFS starting from `start_node`, but only traverse edges
+        where `edge_condition(edge_feature)` is True.
+        
+        :param start_node: The node key from which to start the BFS.
+        :param edge_condition: A function(edge_feature: dict) -> bool
+                              that returns True if we should traverse
+                              the edge, and False otherwise.
+        :param max_levels: Maximum depth (level) to explore in the BFS.
+        
+        :return: A dict mapping level -> list of nodes at that level. E.g.:
+                 {
+                   0: [start_node],
+                   1: [...],
+                   2: [...],
+                   3: [...]
+                 }
+        """
+        visited = set()
+        queue = deque([(start_node, 0)])
+        
+        # We'll store nodes by level in a dict
+        levels = {level: [] for level in range(max_levels + 1)}
+        
+        while queue:
+            node, depth = queue.popleft()
+            
+            # Skip if we've already visited
+            if node in visited:
+                continue
+            
+            # Mark this node as visited
+            visited.add(node)
+            
+            # Record node in the appropriate level (if within max_levels)
+            if depth <= max_levels:
+                levels[depth].append(node)
+            
+            # If we're not at the max depth, explore further
+            if depth < max_levels:
+                # Get all outgoing edges from this node
+                out_edges = self.get_outgoing_edges(node)
+                
+                for edge_key_bytes in out_edges:
+                    edge_key_str = edge_key_bytes.decode("utf-8")
+                    
+                    # Retrieve the edge feature (which presumably contains "from" and "to", or "type")
+                    edge_feat = self.get_edge_feature(edge_key_str)
+                    if edge_feat is None:
+                        continue  # Edge feature not found (shouldn't happen if well-formed)
+                    
+                    # Check user-defined condition on edge features
+                    if edge_condition(edge_feat):
+                        # If condition passes, proceed to the 'to' node
+                        neighbor = edge_feat.get("to")
+                        if neighbor not in visited:
+                            queue.append((neighbor, depth + 1))
+        
+        return levels
 
 #
 # Example usage
